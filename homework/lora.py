@@ -16,6 +16,8 @@ class LoRALinear(HalfLinear):
         out_features: int,
         lora_dim: int,
         bias: bool = True,
+        rank: int,
+        alpha: float,
     ) -> None:
         """
         Implement the LoRALinear layer as described in the homework
@@ -26,14 +28,27 @@ class LoRALinear(HalfLinear):
         """
         super().__init__(in_features, out_features, bias)
 
+        self.weight.requires_grad = False
+        self.bias.requires_grad = False if self.bias is not None
+
+        self.lora_a = nn.Linear(in_features, rank, bias = False).to(torch.float32)
+        self.lora_b = nn.Linear(rank, out_features, bias = False).to(torch.float32)
+
+        nn.init.kaiming_uniform_(self.lora_a.weight)
+        nn.init.zeros_(self.lora_b.weight)
+
+        self.alpha = alpha
+        self.rank = rank
+        self.scaling = alpha/rank
+
         # TODO: Implement LoRA, initialize the layers, and make sure they are trainable
         # Keep the LoRA layers in float32
-        raise NotImplementedError()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # TODO: Forward. Make sure to cast inputs to self.linear_dtype and the output back to x.dtype
-        raise NotImplementedError()
-
+        input_dtype = x.dtype
+        
+        
 
 class LoraBigNet(torch.nn.Module):
     class Block(torch.nn.Module):
