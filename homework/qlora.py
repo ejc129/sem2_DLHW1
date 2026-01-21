@@ -29,19 +29,20 @@ class QLoRALinear(Linear4Bit):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         input_dtype = x.dtype
 
-        # A. Base Path: Use the dequantized 4-bit weights
+        # Base Path ---- Use the dequantized 4-bit weights
         # We use the parent's forward which handles the dequantization plumbing
         base_out = super().forward(x)
 
-        # B. LoRA Path: (x @ A.T) @ B.T
+        # LoRA Path: (x @ A.T) @ B.T
         # We perform this in float32 for precision
         x_f32 = x.to(torch.float32)
+
         lora_out = torch.nn.functional.linear(
             torch.nn.functional.linear(x_f32, self.lora_a), 
             self.lora_b
         )
 
-        # Combine: y = Wx + (BA)x
+        # Combine: y = Wx + (BA)x ,,,, 
         return (base_out + lora_out).to(input_dtype)
 
 class QLoRABigNet(torch.nn.Module):

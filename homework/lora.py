@@ -33,6 +33,7 @@ class LoRALinear(HalfLinear):
         self.weight.requires_grad = False
         if self.bias is not None: self.bias.requires_grad = False 
 
+
         self.lora_a = nn.Linear(in_features, rank, bias = False).to(torch.float32)
         self.lora_b = nn.Linear(rank, out_features, bias = False).to(torch.float32)
 
@@ -47,18 +48,7 @@ class LoRALinear(HalfLinear):
         # Keep the LoRA layers in float32
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Run the base HalfLinear (it should handle its own FP16 math)
-        # This returns an FP32 tensor b.c. of HalfLinear implementation
-        res_base = super().forward(x) 
-        
-        # Run LoRA path in FP32
-        # Ensuring x is FP32 to match lora_a/b weights...
-        x_fp32 = x.to(torch.float32)
-        res_lora = self.lora_b(self.lora_a(x_fp32)) * self.scaling
-        
-        # Sum them (both are now FP32) and return in original x.dtype?
-        return (res_base + res_lora).to(x.dtype)
-
+ 
         # TODO: Forward. Make sure to cast inputs to self.linear_dtype and the output back to x.dtype
         input_dtype = x.dtype
         
