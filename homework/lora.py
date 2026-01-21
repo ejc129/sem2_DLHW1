@@ -47,10 +47,22 @@ class LoRALinear(HalfLinear):
         # Keep the LoRA layers in float32
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Run the base HalfLinear (it should handle its own FP16 math)
+        # This returns an FP32 tensor b.c. of HalfLinear implementation
+        res_base = super().forward(x) 
+        
+        # Run LoRA path in FP32
+        # Ensuring x is FP32 to match lora_a/b weights...
+        x_fp32 = x.to(torch.float32)
+        res_lora = self.lora_b(self.lora_a(x_fp32)) * self.scaling
+        
+        # Sum them (both are now FP32) and return in original x.dtype?
+        return (res_base + res_lora).to(x.dtype)
+
         # TODO: Forward. Make sure to cast inputs to self.linear_dtype and the output back to x.dtype
         input_dtype = x.dtype
         
-        result_base_linear = super().forward(x.to(self.linear_dtype))
+        result_base_linear = super().forward(x.to(torch.float16))
         x_imtermediary = x.to(torch.float32)
         x_imtermediary = self.lora_a(x_imtermediary)
         x_imtermediary = self.lora_b(x_imtermediary)
@@ -92,9 +104,20 @@ class LoraBigNet(torch.nn.Module):
             self.Block(BIGNET_DIM, lora_dim),
             
         )
+        # 1. Freeze EVERYTHING in the network
+        for param in self.parameters():
+            param.requires_grad = False
+
+        # 2. Unfreeze ONLY the LoRA adapters
+        # This looks for any parameter with "lora" in its name
+        for name, param in self.named_parameters():
+            if "lora_" in name:
+                param.requires_grad = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         return self.model(x)
+
 
 
 def load(path: Path | None) -> LoraBigNet:
@@ -102,4 +125,8 @@ def load(path: Path | None) -> LoraBigNet:
     net = LoraBigNet()
     if path is not None:
         net.load_state_dict(torch.load(path, weights_only=True), strict=False)
+    
     return net
+
+if __name__ == "__main__":
+    verify_lora_initialization()
