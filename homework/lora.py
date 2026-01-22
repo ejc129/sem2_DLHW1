@@ -4,9 +4,9 @@ import torch
 
 from .bignet import BIGNET_DIM, LayerNorm  # noqa: F401
 from .half_precision import HalfLinear
+from .low_precision import Linear4Bit
 
 import torch.nn as nn
-
 
 class LoRALinear(HalfLinear):
     lora_a: torch.nn.Module
@@ -17,7 +17,6 @@ class LoRALinear(HalfLinear):
         in_features: int,
         out_features: int,
         lora_dim: int,
-        alpha: float,
         bias: bool = True,
     ) -> None:
         """
@@ -27,58 +26,64 @@ class LoRALinear(HalfLinear):
         Hint: Remember to initialize the weights of the lora layers
         Hint: Make sure the linear layers are not trainable, but the LoRA layers are
         """
-        rank = lora_dim
         super().__init__(in_features, out_features, bias)
 
-        self.weight.requires_grad = False
-        if self.bias is not None: self.bias.requires_grad = False 
+        # Freeze the base linear layer (inherited from HalfLinear)
+        for param in self.parameters():
+            param.requires_grad = False
+
+        # Initialize LoRA layers in float32
+        # where A is (in_features x lora_dim) and B is (lora_dim x out_features)
+        self.lora_a = torch.nn.Linear(in_features, lora_dim, bias=False)
+        self.lora_b = torch.nn.Linear(lora_dim, out_features, bias=False)
 
 
-        self.lora_a = nn.Linear(in_features, rank, bias = False).to(torch.float32)
-        self.lora_b = nn.Linear(rank, out_features, bias = False).to(torch.float32)
+        # Initialize LoRA weights
+        torch.nn.init.kaiming_uniform_(self.lora_a.weight, a=5**0.5)
+        torch.nn.init.zeros_(self.lora_b.weight)
 
-        nn.init.kaiming_uniform_(self.lora_a.weight)
-        nn.init.zeros_(self.lora_b.weight)
 
-        self.alpha = alpha
-        self.rank = rank
-        self.scaling = alpha/rank
 
-        # TODO: Implement LoRA, initialize the layers, and make sure they are trainable
-        # Keep the LoRA layers in float32
+        # Ensure LoRA layers are trainable and in float32...
+        self.lora_a.weight.requires_grad = True
+        self.lora_b.weight.requires_grad = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
- 
-        # TODO: Forward. Make sure to cast inputs to self.linear_dtype and the output back to x.dtype
-        input_dtype = x.dtype
-        
-        result_base_linear = super().forward(x.to(torch.float16))
-        x_imtermediary = x.to(torch.float32)
-        x_imtermediary = self.lora_a(x_imtermediary)
-        x_imtermediary = self.lora_b(x_imtermediary)
-        x_imtermediary = x_imtermediary * self.scaling
-        
-        return (result_base_linear + x_imtermediary).to(input_dtype)
+        # Store original dtype
+        original_dtype = x.dtype
+        # cmpute base linear layer output using parent's forward (handles dtype conversion)
+        base_output = super().forward(x)
 
 
+
+        # Compute LoRA adaptation in float32
+        x_float32 = x.to(torch.float32)
+        lora_output = self.lora_b(self.lora_a(x_float32))
+        # convert LoRA output to original dtype and add to base output
+        lora_output = lora_output.to(original_dtype)
+        output = base_output + lora_output
+        # yay!
+
+        return output
 class LoraBigNet(torch.nn.Module):
     class Block(torch.nn.Module):
-        def __init__(self, channels: int, lora_dim: int):
-            alpha = lora_dim * 5
+        def __init__(self, channels, lora_dim):
             super().__init__()
+            # TODO: Implement me (feel free to copy and reuse code from bignet.py)
             self.model = torch.nn.Sequential(
-                LoRALinear(channels, channels, lora_dim, alpha, False),
+                LoRALinear(channels, channels, lora_dim),
                 torch.nn.ReLU(),
-                LoRALinear(channels, channels, lora_dim, alpha, False),
+                LoRALinear(channels, channels, lora_dim),
                 torch.nn.ReLU(),
-                LoRALinear(channels, channels, lora_dim, alpha, False),
+                LoRALinear(channels, channels, lora_dim),
             )
 
-        def forward(self, x: torch.Tensor):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.model(x) + x
 
     def __init__(self, lora_dim: int = 32):
         super().__init__()
+        group_size = 16
         # TODO: Implement me (feel free to copy and reuse code from bignet.py)
         self.model = torch.nn.Sequential(
             self.Block(BIGNET_DIM, lora_dim),
@@ -92,17 +97,9 @@ class LoraBigNet(torch.nn.Module):
             self.Block(BIGNET_DIM, lora_dim),
             LayerNorm(BIGNET_DIM),
             self.Block(BIGNET_DIM, lora_dim),
-            
         )
-        # 1. Freeze EVERYTHING in the network
-        for param in self.parameters():
-            param.requires_grad = False
 
-        # 2. Unfreeze ONLY the LoRA adapters
-        # This looks for any parameter with "lora" in its name
-        for name, param in self.named_parameters():
-            if "lora_" in name:
-                param.requires_grad = True
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
@@ -118,5 +115,3 @@ def load(path: Path | None) -> LoraBigNet:
     
     return net
 
-if __name__ == "__main__":
-    verify_lora_initialization()

@@ -19,44 +19,38 @@ class HalfLinear(torch.nn.Linear):
         Feel free to use the torch.nn.Linear class as a parent class (it makes load_state_dict easier, names match).
         Feel free to set self.requires_grad_ to False, we will not backpropagate through this layer.
         """
-        super().__init__(in_features= in_features, out_features= out_features, bias= bias)
-        with torch.no_grad():
-          # nn.Parameter wrap so we tell torch that this is a parameter
-            # to be learned/optimized through training
-          # .detach() to return a Tensor that shares the same storage as 
-            # self.weight but has no Autograd history. Ensures a clean new leaf
-          # this self.bias is here because we have nn.Linear parent
-          self.weight = nn.Parameter(
-            self.weight.detach().to(torch.float16), requires_grad= False
-          )
-          # this self.weight is here because we have nn.Linear parent
-          if self.bias is not None:
-            self.bias = nn.Parameter(
-              self.bias.detach().to(torch.float16), requires_grad= False
-            )
-        self.requires_grad_(False)
+        super().__init__(in_features, out_features, bias)
+        
+        # Store the linear dtype for forward pass
+        self.linear_dtype = torch.float16
+        
+        # Convert weights to half precision
+        self.weight.data = self.weight.data.to(self.linear_dtype)
+        if self.bias is not None:
+            self.bias.data = self.bias.data.to(self.linear_dtype)
+        
+        # Disable gradient computation for this layer ..?? (idk if its numerically stable?)
+        self.weight.requires_grad = False
+        if self.bias is not None:
+            self.bias.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Hint: Use the .to method to cast a tensor to a different dtype (i.e. torch.float16 or x.dtype)
         # The input and output should be of x.dtype = torch.float32
-        # TODO: Implement me
-        if x.dtype != torch.float32:
-          x = x.to(dtype= torch.float32)
+        
+        # Store original dtype.. again.
+        original_dtype = x.dtype
+        
+        # Cast input to float16 for computation
+        x_half = x.to(self.linear_dtype)
+        
+        # Perform linear operation in float16
+        output = torch.nn.functional.linear(x_half, self.weight, self.bias)
+        
+        # Cast output back to original dtype
+        return output.to(original_dtype)
 
-        # we cast to fp16
-        x_half = x.to(dtype= torch.float16)
-        weight_half = self.weight.to(dtype= torch.float16, device= x.device)
-        
-        if self.bias is not None:
-          bias_half = self.bias.to(dtype= torch.float16, device= x.device)
-        else: 
-          bias_half = None
-        
-        # functions as a stateless nn.Linear, so we don't have to store the weight and bias
-        # saves on the memory that is so precious <3 
-        y_half = F.linear(x_half, weight_half, bias_half)
-        y = y_half.to(dtype= torch.float32)
-        return y
+
 
 class HalfBigNet(torch.nn.Module):
     """
